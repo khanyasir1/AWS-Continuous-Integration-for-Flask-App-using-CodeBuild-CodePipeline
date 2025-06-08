@@ -164,7 +164,7 @@ $ python app.py
 ---
 
 
-````markdown
+
 # 🚀 Continuous Deployment (CD) with AWS CodeDeploy, EC2, and CodePipeline
 
 This guide walks you through a **step-by-step setup** of **Continuous Deployment (CD) in AWS using CodeDeploy**, integrated with EC2 and CodePipeline.
@@ -212,18 +212,34 @@ This guide walks you through a **step-by-step setup** of **Continuous Deployment
 SSH into your EC2 instance and run:
 
 ```bash
+# Update the package index to get the latest package metadata
 sudo apt update
+
+# Install Ruby (required for CodeDeploy agent to run)
 sudo apt install ruby -y
+
+# Install wget (used to download files over the internet)
 sudo apt install wget -y
 
+# Navigate to the home directory of the 'ubuntu' user
 cd /home/ubuntu
+
+# Download the AWS CodeDeploy agent installation script from the S3 bucket (US East 1 region)
 wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+
+# Make the downloaded install script executable
 chmod +x ./install
+
+# Run the install script with 'auto' flag to install CodeDeploy agent non-interactively
 sudo ./install auto
 
-# Start and enable CodeDeploy agent
+# Start the CodeDeploy agent service
 sudo systemctl start codedeploy-agent
+
+# Enable the service to start automatically on system boot
 sudo systemctl enable codedeploy-agent
+
+# Check and display the status of the CodeDeploy agent
 sudo systemctl status codedeploy-agent
 ````
 
@@ -231,25 +247,97 @@ sudo systemctl status codedeploy-agent
 
 ---
 
-### ✅ Step 3: IAM Role for EC2 (Instance Profile)
+## 🔐 IAM Role Setup: Choose One of Two Options
+
+To allow **CodeDeploy** to deploy your app onto **EC2**, you need the right IAM roles. You can either:
+
+1. Use **two separate roles** (recommended for production, better security isolation)
+2. Use **a single unified role** (simpler for small projects or learning)
+
+---
+
+### 🧭 Option 1: Two Separate IAM Roles (Recommended for Production)
+
+#### ✅ Step 3: IAM Role for EC2 (Instance Profile)
 
 Create an IAM Role:
 
 * **Name:** `CodeDeployEC2Role`
-* **Policy:** `AmazonEC2RoleforAWSCodeDeploy`, `AmazonS3ReadOnlyAccess`
-* **Attach to EC2 Instance**
+* **Policies:**
+  - `AmazonEC2RoleforAWSCodeDeploy`
+  - `AmazonS3ReadOnlyAccess`
+* **Attach** this role to your EC2 instance
 
-> ✅ Allows CodeDeploy to access EC2 and pull code from S3.
+✅ This allows EC2 to be targeted by CodeDeploy and access S3 artifacts.
 
 ---
 
-### ✅ Step 4: IAM Role for CodeDeploy
+#### ✅ Step 4: IAM Role for CodeDeploy
 
-Create another IAM role:
+Create another IAM Role:
 
 * **Name:** `CodeDeployServiceRole`
 * **Policy:** `AWSCodeDeployRole`
 * **Use Case:** CodeDeploy
+
+✅ This allows the CodeDeploy service to orchestrate the deployment process.
+
+---
+
+### 🧭 Option 2: Use a Single Unified IAM Role (Simpler for Learning/Demo)
+
+You can combine both roles into one to simplify configuration.
+
+#### ✅ Step 3: Create a Unified IAM Role
+
+1. Go to **IAM > Roles > Create Role**
+2. Choose **Trusted entity type:** AWS service
+3. Use **Custom trust policy**, and paste:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "ec2.amazonaws.com",
+          "codedeploy.amazonaws.com"
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+````
+
+4. Attach the following policies:
+
+* `AWSCodeDeployFullAccess`
+* `AmazonEC2FullAccess`
+* `AmazonS3ReadOnlyAccess` (if needed)
+
+5. Name the role: **`CodeDeployEC2Role`**
+6. Create the role.
+
+---
+
+#### ✅ Step 4: Attach Unified Role to EC2 Instance
+
+1. Go to **EC2 Console > Instances**
+2. Select your EC2 instance
+3. Click **Actions > Security > Modify IAM Role**
+4. Attach the `CodeDeployEC2Role` you created
+
+✅ Now EC2 and CodeDeploy can both operate using a single role.
+
+---
+
+📌 **Note:** While the unified role is easier to manage, the **two-role setup is preferred for production** environments to follow **least privilege** principles and maintain security boundaries.
+
+
+
 
 ---
 
@@ -276,26 +364,36 @@ Create another IAM role:
 
 ---
 
-### ✅ Step 8: Write `appspec.yml`
+### ✅ Step 7: Write `appspec.yml`
 
 ```yaml
+# The version of the AppSpec file format
 version: 0.0
+
+# Target operating system (Linux for EC2 instances)
 os: linux
 
+# Lifecycle event hooks define custom scripts to run at different stages of deployment
 hooks:
+  # This hook runs BEFORE the new version is installed
+  # Used to gracefully stop running containers or services
   ApplicationStop:
-    - location: scripts/stop_container.sh
-      timeout: 300
-      runas: root
+    - location: scripts/stop_container.sh  # Path to the script to stop the app or container
+      timeout: 300                         # Maximum time (in seconds) allowed for the script to run
+      runas: root                          # Run this script as the root user
+
+  # This hook runs AFTER files are copied to the EC2 instance
+  # Used to start services or containers with the updated code
   AfterInstall:
-    - location: scripts/start_container.sh
-      timeout: 300
-      runas: root
+    - location: scripts/start_container.sh # Path to the script that starts the app or container
+      timeout: 300                         # Maximum time allowed for the script to complete
+      runas: root                          # Run this script as the root user
+
 ```
 
 ---
 
-### ✅ Step 9: Write Bash Scripts
+### ✅ Step 8: Write Bash Scripts
 
 **scripts/start\_container.sh**
 
@@ -322,7 +420,11 @@ set -e
 echo "Stopping Docker container..."
 
 # Stop the running container (if any)
-containerId = `docker ps | awk -F " " '{print $1}'`
+
+# checks is there any running container , then copy the container Id
+containerId=`docker ps | awk -F " " '{print $1}'`
+
+#forcefully remove the container
 docker rm -f $containerId
 ```
 
@@ -332,7 +434,7 @@ docker rm -f $containerId
 
 ---
 
-### ✅ Step 11: Trigger Manual Deployment
+### ✅ Step 9: Trigger Manual Deployment
 
 1. Go to **CodeDeploy → Application → Deployment Groups**
 2. Click **Create Deployment**
@@ -342,7 +444,7 @@ docker rm -f $containerId
 
 ---
 
-### ✅ Step 12: Automate with CodePipeline
+### ✅ Step 10: Automate with CodePipeline
 
 1. Create pipeline with stages:
 
